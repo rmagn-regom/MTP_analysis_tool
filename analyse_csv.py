@@ -31,8 +31,15 @@ def calculs_complementaires(df):
     pass  # Cette fonction n'est plus utilisée
 
 # Interface Streamlit
+
+
+# Affichage du logo après le titre
+import os
+logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+if os.path.exists(logo_path):
+    st.image(logo_path)
+
 st.title("MTP Analysis Tool")
-st.write("Bienvenue dans l'outil d'analyse des données MTP !")
 
 fichier = st.file_uploader("Choisissez un fichier CSV", type=["csv"])
 if fichier is not None:
@@ -238,7 +245,7 @@ if fichier is not None:
             with tab4:
                 # Répartition mensuelle de LIBELLEFAMILLEDESTCHOISISSEUR par LIBELLEFAMILLEDESTMACHINE
                         if 'LIBELLEFAMILLEDESTMACHINE' in df.columns and 'LIBELLEFAMILLEDESTCHOISISSEUR' in df.columns:
-                            st.write("**Répartition mensuelle (%) et effectif de LIBELLEFAMILLEDESTCHOISISSEUR pour chaque LIBELLEFAMILLEDESTMACHINE**")
+                            st.write("**Répartition mensuelle (%) et quantité de Prop MTP pour chaque Choix Trieur**")
                             # Table de contingence pour les pourcentages
                             crosstab_pct = pd.crosstab(
                                 [df['Mois'], df['LIBELLEFAMILLEDESTMACHINE']],
@@ -252,12 +259,35 @@ if fichier is not None:
                                 df['LIBELLEFAMILLEDESTCHOISISSEUR']
                             )
                             # Fusionner les deux tables en concaténant les colonnes (ex: "VAL1 (%)", "VAL1 (N)")
-                            columns = []
+                            # Construction d'un MultiIndex de colonnes pour affichage structuré
+                            arrays = [[], []]
                             for col in crosstab_pct.columns:
-                                columns.append((str(col) + ' (%)'))
-                                columns.append((str(col) + ' (U)'))
+                                arrays[0].extend(["LIBELLEFAMILLEDESTCHOISISSEUR"]*2)
+                                arrays[1].extend([str(col) + ' (%)', str(col) + ' (U)'])
+                            multi_columns = pd.MultiIndex.from_arrays(arrays)
                             merged = pd.DataFrame(index=crosstab_pct.index)
                             for col in crosstab_pct.columns:
-                                merged[str(col) + ' (%)'] = crosstab_pct[col]
-                                merged[str(col) + ' (U)'] = crosstab_count[col]
+                                merged[("LIBELLEFAMILLEDESTCHOISISSEUR", str(col) + ' (%)')] = crosstab_pct[col]
+                                merged[("LIBELLEFAMILLEDESTCHOISISSEUR", str(col) + ' (U)')] = crosstab_count[col]
                             merged = merged.reset_index()
+                            # Renommer les colonnes d'index pour affichage
+                            merged = merged.rename(columns={
+                                'Mois': ('Prop MTP', 'Mois'),
+                                'LIBELLEFAMILLEDESTMACHINE': ('Prop MTP', 'Libellé'),
+                            })
+                            # Construction du MultiIndex final
+                            new_cols = []
+                            for col in merged.columns:
+                                if isinstance(col, tuple):
+                                    # Pour les colonnes de pourcentage/compte, remplacer le niveau 0 par 'Choix Trieur'
+                                    if col[0] == 'LIBELLEFAMILLEDESTCHOISISSEUR':
+                                        new_cols.append(('Choix Trieur', col[1]))
+                                    elif col[0] == 'Prop MTP':
+                                        new_cols.append(col)
+                                    else:
+                                        new_cols.append(col)
+                                else:
+                                    # Pour toute colonne d'index restante
+                                    new_cols.append(('Prop MTP', col))
+                            merged.columns = pd.MultiIndex.from_tuples(new_cols)
+                            st.dataframe(merged, use_container_width=True)
