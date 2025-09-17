@@ -45,6 +45,8 @@ for k,v in {
     'months_validated': False,
     'days_selected': [],
     'analysis_requested': False,
+    'conv_positions': 24,
+    'conv_special': 6,
 }.items():
     st.session_state.setdefault(k, v)
 
@@ -94,11 +96,30 @@ if not st.session_state.months_validated:
     st.stop()
 
 # =====================
-# 3. Sélection des jours (optionnel)
+# 3. Sélection des jours + paramètres convoyeur (optionnels)
 # =====================
 df_months = df_raw[df_raw['DTE'].dt.to_period('M').astype(str).isin(st.session_state.months_selected)].copy()
 jours_disponibles = sorted(df_months['DTE'].dt.date.unique())
-jours_selectionnes = st.multiselect("3. (Option) Sélection de jours spécifiques", jours_disponibles, default=st.session_state.days_selected, key='jours_multiselect')
+
+col_jours, col_conf = st.columns([2,1])
+with col_jours:
+    jours_selectionnes = st.multiselect(
+        "3. (Option) Sélection de jours spécifiques",
+        jours_disponibles,
+        default=st.session_state.days_selected,
+        key='jours_multiselect'
+    )
+with col_conf:
+    st.markdown("**Paramètres convoyeur**")
+    conv_positions = st.number_input("Positions", min_value=1, max_value=200, value=st.session_state.conv_positions, step=1, key='conv_positions_input')
+    conv_special = st.number_input("Position spéciale 'Non'", min_value=0, max_value=200, value=st.session_state.conv_special, step=1, key='conv_special_input')
+    # Clamp si incohérence
+    if conv_special >= conv_positions:
+        st.warning("La position spéciale doit être < Positions. Ajustement automatique.")
+        conv_special = max(0, conv_positions-1)
+    st.session_state.conv_positions = conv_positions
+    st.session_state.conv_special = conv_special
+
 st.session_state.days_selected = jours_selectionnes
 
 # =====================
@@ -331,7 +352,9 @@ if include_buffer and tab_buffer is not None:
                     continue
                 df_day = df_day.sort_values('H_ACQ').dropna(subset=['H_ACQ']).reset_index(drop=True)
                 events = []  # (time, +1/-1)
-                positions = [None]*24  # Fin d'occupation prévue par position
+                total_positions = int(st.session_state.conv_positions)
+                special_pos = int(st.session_state.conv_special)
+                positions = [None]*total_positions  # Fin d'occupation prévue par position
                 for _, row in df_day.iterrows():
                     t_in = row['H_ACQ']
                     if pd.isna(t_in):
@@ -339,23 +362,23 @@ if include_buffer and tab_buffer is not None:
                     t_out_real = row['H_TRI'] if pd.notna(row['H_TRI']) else None
                     # Cherche première position libre
                     pos = 0
-                    while pos < 24 and positions[pos] is not None and positions[pos] <= t_in:
+                    while pos < total_positions and positions[pos] is not None and positions[pos] <= t_in:
                         # Libérer positions dont temps est écoulé
                         if positions[pos] <= t_in:
                             positions[pos] = None
                         pos += 1
                     # Re-scan pour première case vide
                     pos = 0
-                    while pos < 24 and positions[pos] is not None:
+                    while pos < total_positions and positions[pos] is not None:
                         pos += 1
-                    if pos < 24:
+                    if pos < total_positions:
                         # Placement direct
                         if t_out_real and t_out_real > t_in:
                             t_out = t_out_real
                         else:
-                            # Durée simulée: 1.5s * pos (ou 6 si valorisé Non)
+                            # Durée simulée: 1.5s * pos (ou special_pos si valorisé Non)
                             if row.get('LIBELLEVALORISEDESTMACHINE','') == 'Non':
-                                pos_sim = 6
+                                pos_sim = special_pos
                                 t_out = t_in + pd.to_timedelta(1.5*pos_sim, unit='s')
                                 pos = pos_sim
                             else:
@@ -375,10 +398,11 @@ if include_buffer and tab_buffer is not None:
                             t_out = t_out_real
                         else:
                             if row.get('LIBELLEVALORISEDESTMACHINE','') == 'Non':
-                                t_out = t_in2 + pd.to_timedelta(1.75*6, unit='s')
-                                pos_libre = 6
+                                t_out = t_in2 + pd.to_timedelta(1.75*special_pos, unit='s')
+                                pos_libre = special_pos
                             else:
-                                t_out = t_in2 + pd.to_timedelta(1.75*(23-pos_libre), unit='s')
+                                # distance dynamique jusqu'à dernière position
+                                t_out = t_in2 + pd.to_timedelta(1.75*((total_positions-1)-pos_libre), unit='s')
                         events.append((t_in2, +1))
                         events.append((t_out, -1))
                         positions[pos_libre] = t_out
@@ -399,7 +423,7 @@ if include_buffer and tab_buffer is not None:
                 ax.set_xlabel('Heure (décimal)')
                 ax.set_ylabel('Nb pneus sur convoyeur')
                 ax.set_title(f"Remplissage convoyeur {jour.strftime('%d/%m/%Y')}")
-                ax.set_ylim(0,25)
+                ax.set_ylim(0, total_positions+1)
                 st.pyplot(fig)
 
                 # Synthèse par heure : nombre moyen de pneus dans le convoyeur
