@@ -152,14 +152,38 @@ with tab0:
     st.dataframe(df_final.head(50))
 
 with tab1:
-    st.subheader("Sorties automatiques")
-    # Placeholder simple: répartition par Mois
-    if 'LIBELLEFAMILLEDESTMACHINE' in df_final.columns:
-        counts = df_final.groupby(['Mois','LIBELLEFAMILLEDESTMACHINE']).size().unstack(fill_value=0)
-        st.write("Répartition (nb lignes) par machine et mois")
-        st.dataframe(counts)
+    st.subheader("Synthèse LIBELLEVALORISEDESTMACHINE")
+    champ = 'LIBELLEVALORISEDESTMACHINE'
+    if champ in df_final.columns:
+        # Table effectifs
+        tab_n = pd.crosstab(df_final['Mois'], df_final[champ], margins=True, margins_name='Total')
+        # Table pourcentages
+        tab_pct = pd.crosstab(df_final['Mois'], df_final[champ], normalize='index', margins=True, margins_name='Total')*100
+        tab_pct = tab_pct.round(1)
+        # Fusion pour affichage combiné, cellule par cellule
+        def format_cell(n, pct):
+            try:
+                return f"{int(n)} ({pct:.1f}%)"
+            except:
+                return f"{n} ({pct}%)"
+        tab_mix = tab_n.copy()
+        # Pour éviter KeyError sur 'Total', n'itérer que sur l'intersection des index/colonnes
+        idxs = set(tab_n.index) & set(tab_pct.index)
+        cols = set(tab_n.columns) & set(tab_pct.columns)
+        for idx in idxs:
+            for col in cols:
+                n = tab_n.at[idx, col]
+                pct = tab_pct.at[idx, col]
+                tab_mix.at[idx, col] = format_cell(n, pct)
+        # Pour les totaux (lignes/colonnes hors intersection), afficher juste le nombre
+        for idx in tab_n.index:
+            for col in tab_n.columns:
+                if (idx not in idxs) or (col not in cols):
+                    tab_mix.at[idx, col] = str(tab_n.at[idx, col])
+        st.write("Tableau croisé Mois x ", champ, " (N (pct %)) avec totaux")
+        st.dataframe(tab_mix)
     else:
-        st.info("Colonne 'LIBELLEFAMILLEDESTMACHINE' absente.")
+        st.info(f"Colonne '{champ}' absente.")
 
 with tab2:
     st.subheader("Analyse Acquisition")
@@ -377,3 +401,31 @@ if include_buffer and tab_buffer is not None:
                 ax.set_title(f"Remplissage convoyeur {jour.strftime('%d/%m/%Y')}")
                 ax.set_ylim(0,25)
                 st.pyplot(fig)
+
+                # Synthèse par heure : nombre moyen de pneus dans le convoyeur
+                import numpy as np
+                # On va approximer la courbe par pas de 1 minute
+                if len(timeline) > 1:
+                    t_min = int(np.floor(min(times)*60))
+                    t_max = int(np.ceil(max(times)*60))
+                    minutes = np.arange(t_min, t_max+1)
+                    # Pour chaque minute, trouver le dernier count connu
+                    timeline_arr = np.array([(t.total_seconds()/60, v) for t,v in timeline])
+                    mean_per_hour = {}
+                    hour_bins = {}
+                    for m in minutes:
+                        # Chercher le dernier event <= m
+                        idx = np.searchsorted(timeline_arr[:,0], m, side='right')-1
+                        if idx >= 0:
+                            v = timeline_arr[idx,1]
+                        else:
+                            v = 0
+                        h = int(m//60)
+                        mean_per_hour.setdefault(h, []).append(v)
+                    synth = {h: np.mean(vals) for h,vals in mean_per_hour.items()}
+                    synth_tab = pd.DataFrame({
+                        'Heure': [f"{h:02d}:00" for h in sorted(synth.keys())],
+                        'Nb moyen pneus': [round(synth[h],2) for h in sorted(synth.keys())]
+                    })
+                    st.write("Synthèse par heure : nombre moyen de pneus dans le convoyeur")
+                    st.dataframe(synth_tab, hide_index=True)
