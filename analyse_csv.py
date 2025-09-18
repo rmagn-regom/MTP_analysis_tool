@@ -418,38 +418,51 @@ if include_buffer and tab_buffer is not None:
                     timeline.append((t, count))
                 times = [t.total_seconds()/3600 for t,_ in timeline]
                 values = [v for _,v in timeline]
-                fig, ax = plt.subplots(figsize=(8,4))
-                ax.step(times, values, where='post')
-                ax.set_xlabel('Heure (décimal)')
-                ax.set_ylabel('Nb pneus sur convoyeur')
-                ax.set_title(f"Remplissage convoyeur {jour.strftime('%d/%m/%Y')}")
-                ax.set_ylim(0, total_positions+1)
-                st.pyplot(fig)
-
-                # Synthèse par heure : nombre moyen de pneus dans le convoyeur
+                # Construction d'une série minute par minute pour un affichage en barres interactif
                 import numpy as np
-                # On va approximer la courbe par pas de 1 minute
+                try:
+                    import plotly.express as px
+                except ImportError:
+                    st.error("Le module plotly n'est pas installé. Installez-le avec 'pip install plotly' pour voir le graphique interactif.")
+                    continue
                 if len(timeline) > 1:
-                    t_min = int(np.floor(min(times)*60))
-                    t_max = int(np.ceil(max(times)*60))
-                    minutes = np.arange(t_min, t_max+1)
-                    # Pour chaque minute, trouver le dernier count connu
+                    t_min_min = int(np.floor(min(times)*60))
+                    t_max_min = int(np.ceil(max(times)*60))
+                    minutes = np.arange(t_min_min, t_max_min+1)
                     timeline_arr = np.array([(t.total_seconds()/60, v) for t,v in timeline])
-                    mean_per_hour = {}
-                    hour_bins = {}
+                    occ_values = []
                     for m in minutes:
-                        # Chercher le dernier event <= m
-                        idx = np.searchsorted(timeline_arr[:,0], m, side='right')-1
-                        if idx >= 0:
-                            v = timeline_arr[idx,1]
-                        else:
-                            v = 0
-                        h = int(m//60)
-                        mean_per_hour.setdefault(h, []).append(v)
-                    synth = {h: np.mean(vals) for h,vals in mean_per_hour.items()}
-                    synth_tab = pd.DataFrame({
-                        'Heure': [f"{h:02d}:00" for h in sorted(synth.keys())],
-                        'Nb moyen pneus': [round(synth[h],2) for h in sorted(synth.keys())]
+                        idx_ev = np.searchsorted(timeline_arr[:,0], m, side='right')-1
+                        occ = timeline_arr[idx_ev,1] if idx_ev >= 0 else 0
+                        occ_values.append(occ)
+                    base_day = pd.Timestamp(jour)
+                    dt_series = [base_day + pd.to_timedelta(m, unit='m') for m in minutes]
+                    df_minutes = pd.DataFrame({
+                        'DateHeure': dt_series,
+                        'Occupation': occ_values
                     })
+                    # Graphique en barres interactif
+                    fig = px.bar(
+                        df_minutes,
+                        x='DateHeure',
+                        y='Occupation',
+                        labels={'DateHeure':'Heure','Occupation':'Nb pneus'},
+                        title=f"Remplissage convoyeur {jour.strftime('%d/%m/%Y')}"
+                    )
+                    fig.update_layout(
+                        xaxis=dict(showgrid=False),
+                        yaxis=dict(range=[0, total_positions+1]),
+                        hovermode='x unified'
+                    )
+                    fig.update_traces(hovertemplate='<b>%{x|%H:%M}</b><br>Occupation: %{y} pneus<extra></extra>')
+                    st.plotly_chart(fig, use_container_width=True, config={'displaylogo': False, 'modeBarButtonsToRemove': ['select2d','lasso2d']})
+
+                    # Synthèse par heure : moyenne d'occupation
+                    df_minutes['Heure'] = df_minutes['DateHeure'].dt.hour
+                    synth_tab = df_minutes.groupby('Heure')['Occupation'].mean().round(2).reset_index()
+                    synth_tab['Heure'] = synth_tab['Heure'].apply(lambda h: f"{h:02d}:00")
+                    synth_tab = synth_tab.rename(columns={'Occupation':'Nb moyen pneus'})
                     st.write("Synthèse par heure : nombre moyen de pneus dans le convoyeur")
                     st.dataframe(synth_tab, hide_index=True)
+                else:
+                    st.info("Données insuffisantes pour tracer la courbe interactive.")
